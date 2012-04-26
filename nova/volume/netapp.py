@@ -35,6 +35,7 @@ from nova import flags
 from nova import log as logging
 from nova.openstack.common import cfg
 from nova.volume import driver
+from nova.volume import volume_types
 
 LOG = logging.getLogger("nova.volume.driver")
 
@@ -288,6 +289,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         project = volume['project_id']
         display_name = volume['display_name']
         display_description = volume['display_description']
+        description = None
         if display_name:
             if display_description:
                 description = display_name + "\n" + display_description
@@ -299,6 +301,15 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
             size = default_size
         else:
             size = str(int(volume['size']) * gigabytes)
+        """
+        LOG.debug('volume=%s' % dict(volume))
+        LOG.debug('volume_type_id=%s' % volume['volume_type_id'])
+        volume_type = volume_types.get_volume_type(None,
+                                            volume['volume_type_id'])
+        if volume_type is not None:
+            pass
+        LOG.debug('volume_type=%s' % volume_type)
+        """
         self._provision(name, description, project, size)
 
     def delete_volume(self, volume):
@@ -801,6 +812,32 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
                                                 Request=request)
         self._check_fail(request, response)
 
+    def _resize_volume(self, host_id, vol_name, new_size):
+        """
+        Resize the volume by the amount requested.
+        """
+        request = self.client.factory.create('Request')
+        request.Name = 'volume-size'
+        volume_size_xml = (
+            '<volume>%s</volume><new_size>%s</new_size>')
+        request.Args = text.Raw(qtree_create_xml % (vol_name, new_size))
+        response = self.client.service.ApiProxy(Target=host_id,
+                                                Request=request)
+        self._check_fail(request, response)
+   
+    def _create_qtree(self, host_id, vol_name, qtree_name):
+        """
+        Create a qtree the filer.
+        """
+        request = self.client.factory.create('Request')
+        request.Name = 'qtree-create'
+        qtree_create_xml = (
+            '<mode>0755</mode><volume>%s</volume><qtree>%s</qtree>')
+        request.Args = text.Raw(qtree_create_xml % (vol_name, qtree_name))
+        response = self.client.service.ApiProxy(Target=host_id,
+                                                Request=request)
+        self._check_fail(request, response)
+
     def create_snapshot(self, snapshot):
         vol_name = snapshot['volume_name']
         snapshot_name = snapshot['name']
@@ -813,17 +850,15 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         if not lun:
             msg = _('Failed to get LUN details for LUN ID %s')
             raise exception.Error(msg % lun_id)
-        """
-        XXX obsolete - remove
-        self._create_volume_snapshot(lun.HostId, lun.VolumeName,
-                                     snapshot_name)
-        """
+        extra_gb = snapshot['volume_size']
+        new_size = '+%dg' % extra_gb
+        self._resize_volume(lun.HostId, lun.VolumeName, new_size)
         lun_path = str(lun.LunPath)
-        qtree_path = '/vol/%s' % lun_path[:lun_path.rfind('/')]
-        src_path = '%s/%s' % (qtree_path, vol_name)
+        lun_name = lun_path[lun_path.rfind('/') + 1:]
+        qtree_path = '/vol/%s/%s' % (lun.VolumeName, lun.QtreeName)
+        src_path = '%s/%s' % (qtree_path, lun_name)
         dest_path = '%s/%s' % (qtree_path, snapshot_name)
         self._clone_lun(lun.HostId, src_path, dest_path, True)
-        self._refresh_dfm_luns(lun.HostId)
 
     def delete_snapshot(self, snapshot):
         vol_name = snapshot['volume_name']
@@ -837,14 +872,12 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         if not lun:
             msg = _('Failed to get LUN details for LUN ID %s')
             raise exception.Error(msg % lun_id)
-        """
-        self._delete_volume_snapshot(lun.HostId, lun.VolumeName,
-                                     snapshot_name)
-        """
-        lun_path = str(lun.LunPath)
-        qtree_path = '/vol/%s' % lun_path[:lun_path.rfind('/')]
-        dest_path = '%s/%s' % (qtree_path, snapshot_name)
-        self._destroy_lun(lun.HostId, dest_path)
+        lun_path = '/vol/%s/%s/%s' % (lun.VolumeName, lun.QtreeName,
+                                      snapshot_name)
+        self._destroy_lun(lun.HostId, lun_path)
+        extra_gb = snapshot['volume_size']
+        new_size = '-%dg' % extra_gb
+        self._resize_volume(lun.HostId, lun.VolumeName, new_size)
 
     def create_volume_from_snapshot(self, volume, snapshot):
         vol_name = snapshot['volume_name']
@@ -858,11 +891,15 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         if not lun:
             msg = _('Failed to get LUN details for LUN ID %s')
             raise exception.Error(msg % lun_id)
-        lun_path = str(lun.LunPath)
-        qtree_path = '/vol/%s' % lun_path[:lun_path.rfind('/')]
+
+        extra_gb = volume['volume_size']
+        new_size = '+%dg' % extra_gb
+        self._resize_volume(lun.HostId, lun.VolumeName, new_size)
         clone_name = volume['name']
-        src_path = '%s/%s' % (qtree_path, snapshot_name)
-        dest_path = '%s/%s' % (qtree_path, clone_name)
+        self._create_qtree(lun.HostId, lun.VolumeName, clone_name)
+        src_path = '/vol/%s/%s/%s' % (lun.VolumeName, lun.QtreeName,
+                                      snapshot_name)
+        dest_path = '/vol/%s/%s/%s' % (lun.VolumeName, clone_name, clone_name)
         self._clone_lun(lun.HostId, src_path, dest_path, False)
         self._refresh_dfm_luns(lun.HostId)
 
