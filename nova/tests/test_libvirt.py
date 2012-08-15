@@ -336,10 +336,10 @@ class LibvirtVolumeTestCase(test.TestCase):
         export_string = '192.168.1.1:/nfs/share1'
         name = 'volume-00001'
         export_mnt_base = os.path.join(mnt_base,
-                                       libvirt_driver.get_hash_str(export_string))
+                libvirt_driver.get_hash_str(export_string))
         file_path = os.path.join(export_mnt_base, name)
 
-        connection_info = {'data':{'export': export_string, 'name': name}}
+        connection_info = {'data': {'export': export_string, 'name': name}}
         mount_device = "vde"
         conf = libvirt_driver.connect_volume(connection_info, mount_device)
         tree = conf.format_dom()
