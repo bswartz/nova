@@ -1762,7 +1762,7 @@ class LibvirtConnTestCase(test.TestCase):
         conn._check_shared_storage_test_file("file").AndReturn(True)
 
         self.mox.ReplayAll()
-        self.assertRaises(exception.InvalidSharedStorage,
+        self.assertRaises(exception.InvalidLocalStorage,
                           conn.check_can_live_migrate_source,
                           self.context, instance_ref, dest_check_data)
 
@@ -1810,9 +1810,9 @@ class LibvirtConnTestCase(test.TestCase):
                 return vdmock
 
         self.create_fake_libvirt_mock(lookupByName=fake_lookup)
-        self.mox.StubOutWithMock(self.compute, "rollback_live_migration")
-        self.compute.rollback_live_migration(self.context, instance_ref,
-                                            'dest', False)
+        self.mox.StubOutWithMock(self.compute, "_rollback_live_migration")
+        self.compute._rollback_live_migration(self.context, instance_ref,
+                                              'dest', False)
 
         #start test
         self.mox.ReplayAll()
@@ -1820,7 +1820,7 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertRaises(libvirt.libvirtError,
                       conn._live_migration,
                       self.context, instance_ref, 'dest', False,
-                      self.compute.rollback_live_migration)
+                      self.compute._rollback_live_migration)
 
         instance_ref = db.instance_get(self.context, instance_ref['id'])
         self.assertTrue(instance_ref['vm_state'] == vm_states.ACTIVE)
